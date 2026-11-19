@@ -49,19 +49,25 @@ Two layers (both already biased to the UAE):
 
 ## 3. Configure the UI map
 
-Copy `frontend/.env.example` → `frontend/.env.local` and set:
+The map needs a TomTom key in the browser. It is read when the frontend is **built**:
 
-- `VITE_TOMTOM_API_KEY` — browser key for map + traffic tiles (domain‑restrict it).
-- `VITE_MAP_STYLE_URL` *(optional)* — a TomTom vector style for 3D buildings / full
-  theming. Without it the map uses a clean light TomTom raster basemap.
+| Where | How |
+|---|---|
+| `npm run dev` | copy `frontend/.env.example` to `frontend/.env.local` and set the values |
+| `docker build` | `--build-arg VITE_TOMTOM_API_KEY=...` |
+| Railway | add a service variable with the same name, then redeploy |
+
+- `VITE_TOMTOM_API_KEY`: browser key for map and traffic tiles. It is visible in the page, so
+  restrict it to your site's domain.
+- `VITE_MAP_STYLE_URL` *(optional)*: a TomTom vector style for 3D buildings / full theming.
+- `VITE_MAP_RASTER` *(optional)*: `true` forces the flat raster basemap.
+
+Without a key the map card shows a short note instead of a map; the rest of the answer is
+unaffected.
 
 ## 4. Try it without a live agent (mock mode)
 
-```bash
-cd backend  && RAM_MOCK=true uvicorn main:app --reload --port 8000
-cd frontend && npm install && npm run dev
-```
-
-Ask the mock anything map‑related ("route from Burj Khalifa to Dubai Marina",
-"traffic near Downtown") and the UI renders the sample Dubai map (route + markers +
-incident + traffic toggle). Set `VITE_TOMTOM_API_KEY` to see the basemap tiles.
+Start the app in mock mode (`RAM_MOCK=true`, the default in `backend/.env.example`; see the
+[README](../README.md#run-it-locally)) and ask anything with "route", "map" or "traffic" in it,
+for example "route from Burj Khalifa to Dubai Marina". The UI renders the sample Dubai map
+(route, markers, an incident, the traffic toggle). Set `VITE_TOMTOM_API_KEY` to see the basemap tiles.

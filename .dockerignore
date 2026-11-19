@@ -1,0 +1,15 @@
+# Keep the build context small and keep local secrets and state out of the image.
+.git
+.github
+**/node_modules
+frontend/dist
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+**/.env
+**/.env.*
+backend/data
+docs
+*.md
+.DS_Store

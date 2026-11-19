@@ -1,8 +1,20 @@
+# Node
 node_modules/
 dist/
+
+# Python
 __pycache__/
 *.pyc
-.env
 .venv/
 venv/
+
+# Local settings and secrets (the .env.example files are the templates)
+.env
+.env.local
+.env.*.local
+
+# Runtime state: signed-in RAM sessions (refresh tokens) are kept here
+backend/data/
+
+*.log
 .DS_Store
