@@ -1,6 +1,11 @@
 import { useState, useRef, useCallback } from 'react';
 
-export default function VoiceInput({ onTranscript, disabled }) {
+const SpeechRecognition = typeof window !== 'undefined'
+  ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+/** Mic button: dictates one question. Not rendered where the browser has no
+ *  speech recognition (Firefox), instead of a button that can only apologise. */
+export default function VoiceInput({ onTranscript, disabled, lang = 'en', title }) {
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef(null);
 
@@ -11,14 +16,8 @@ export default function VoiceInput({ onTranscript, disabled }) {
       return;
     }
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert('Speech recognition is not supported in this browser');
-      return;
-    }
-
     const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
+    recognition.lang = lang === 'ar' ? 'ar-SA' : 'en-US';
     recognition.continuous = false;
     recognition.interimResults = false;
 
@@ -34,22 +33,24 @@ export default function VoiceInput({ onTranscript, disabled }) {
     recognitionRef.current = recognition;
     recognition.start();
     setIsListening(true);
-  }, [isListening, onTranscript]);
+  }, [isListening, onTranscript, lang]);
+
+  if (!SpeechRecognition) return null;
 
   return (
     <button
       onClick={toggleListening}
       disabled={disabled}
-      title="Speak instead of typing"
-      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+      title={title || "Speak instead of typing"}
+      className={`relative w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
         isListening
           ? 'bg-red-500/15 text-red-500'
-          : 'hover:bg-[rgba(200,164,74,0.08)]'
+          : 'hover:bg-[rgba(0,114,206,0.08)]'
       } disabled:opacity-30`}
       style={!isListening ? { color: 'var(--text-dim)' } : {}}
     >
       {isListening && (
-        <span className="absolute w-10 h-10 rounded-lg border-2 border-red-400/40 animate-ping" />
+        <span className="absolute inset-0 rounded-lg border-2 border-red-400/40 animate-ping" />
       )}
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>

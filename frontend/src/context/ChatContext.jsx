@@ -1,21 +1,36 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getSessions, getSessionQueries } from '../services/api';
+import { getSessions, getSessionQueries, deleteSession } from '../services/api';
 
 const ChatContext = createContext();
 
-const WELCOME = {
-  role: 'assistant',
-  type: 'text',
-  content: "Welcome to the SAS Retrieval Agent Assistant. Pick an agent (or collection) from the dropdown above and ask me anything — answers are grounded in your indexed documents.",
-};
+// Rendered via the i18n layer (type 'welcome') so it follows the UI language
+const WELCOME = { role: 'assistant', type: 'welcome' };
 const id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
 const NEW_TITLE = 'New conversation';
+
+// The RAM v1 API has no DELETE /querySessions/{id} (confirmed against the
+// OpenAPI spec), so a "deleted" session usually still exists server-side and
+// would reappear in "Recent conversations" on every reload. Track deleted
+// session ids in localStorage so they stay gone in this browser regardless.
+const HIDDEN_KEY = 'ram_hidden_sessions';
+const hiddenSessions = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')); }
+  catch { return new Set(); }
+})();
+const hideSession = (sessionId) => {
+  hiddenSessions.add(sessionId);
+  try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hiddenSessions])); } catch { /* private mode */ }
+};
 
 // Rebuild chat bubbles from RAM's persisted query records
 function messagesFromQueries(queries) {
   const msgs = [WELCOME];
   for (const q of queries) {
+    // Only top-level user turns are chat bubbles. Agent runs spawn internal
+    // sub-queries (origin "agent" / a parentQueryId) under the same session —
+    // those are agent-to-agent calls, not messages, so never render them.
+    if (q.parentQueryId || (q.origin && q.origin !== 'user')) continue;
     msgs.push({ role: 'user', type: 'text', content: q.content });
     if (q.errorCode && q.errorCode !== 0) {
       msgs.push({ role: 'assistant', type: 'text', content: `Error: ${q.errorText || 'query failed'}`, isError: true });
@@ -38,7 +53,7 @@ export function ChatProvider({ children }) {
       setChats(prev => {
         const known = new Set(prev.map(c => c.sessionId).filter(Boolean));
         const stubs = sessions
-          .filter(s => s.id && !known.has(s.id))
+          .filter(s => s.id && !known.has(s.id) && !hiddenSessions.has(s.id))
           .map(s => ({
             id: id(), sessionId: s.id, title: s.title || 'Conversation', messages: [WELCOME], loaded: false,
             // which agent/collections this session talked to (for sidebar scoping)
@@ -96,18 +111,25 @@ export function ChatProvider({ children }) {
   }, []);
 
   const deleteChat = useCallback((chatId) => {
+    // Hide the session permanently in this browser (v1 RAM can't delete it
+    // server-side — see HIDDEN_KEY above), and still attempt the server
+    // delete: it's a no-op today but starts truly deleting if a future RAM
+    // version adds DELETE /querySessions/{id}.
+    const target = chats.find(c => c.id === chatId);
+    if (target?.sessionId) {
+      hideSession(target.sessionId);
+      deleteSession(target.sessionId).catch(e => console.info('RAM has no session delete endpoint (hidden locally instead):', e.message));
+    }
     setChats(p => {
       const filtered = p.filter(c => c.id !== chatId);
-      if (filtered.length === 0)
-        return [{ id: id(), sessionId: null, title: NEW_TITLE, messages: [WELCOME], loaded: true }];
-      return filtered;
-    });
-    setActiveChatId(prev => {
-      if (prev === chatId) {
-        const remaining = chats.filter(c => c.id !== chatId);
-        return remaining.length > 0 ? remaining[0].id : prev;
-      }
-      return prev;
+      const next = filtered.length === 0
+        ? [{ id: id(), sessionId: null, title: NEW_TITLE, messages: [WELCOME], loaded: true }]
+        : filtered;
+      // Keep the active chat valid against the *new* list (derived here, not
+      // from a possibly-stale closure): if the deleted chat was active, or the
+      // list was reset to a fresh chat, switch to the first remaining chat.
+      setActiveChatId(curr => (next.some(c => c.id === curr) ? curr : next[0].id));
+      return next;
     });
   }, [chats]);
 

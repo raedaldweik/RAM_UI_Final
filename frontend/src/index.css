@@ -1,15 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  /* Same token names as the reports chatbot (kept for component compatibility) —
-     values re-skinned to the SAS Institute palette. */
-  --gold: #0072CE;                 /* SAS bright blue */
-  --gold-hi: #2B95E8;              /* lighter blue */
-  --gold-lo: #0A2540;              /* SAS deep navy */
-  --gold-grad: linear-gradient(135deg, #2B95E8, #0072CE, #0A2540);
+  /* SAS palette */
+  --sas: #0072CE;                  /* SAS bright blue */
+  --sas-hi: #2B95E8;               /* lighter blue */
+  --sas-lo: #0A2540;               /* SAS deep navy */
+  --sas-grad: linear-gradient(135deg, #2B95E8, #0072CE, #0A2540);
   --nav-grad: linear-gradient(135deg, #061A2D 0%, #0A2540 45%, #08243F 75%, #0F3A5F 100%);
 
   /* Ink ladder — same as the dashboards */
@@ -158,19 +157,35 @@ html, body {
   padding: 1.4cqw 1.8cqw 0;
 }
 .brand-logo {
-  height: 5.5cqw; width: auto; object-fit: contain; display: block;
+  height: 5.5cqw; min-height: 48px; max-height: 76px;
+  width: auto; object-fit: contain; display: block;
   filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.08));
 }
 .title-block { display: flex; flex-direction: column; gap: 0.7cqw; min-width: 0; }
 .title-row { display: flex; align-items: center; gap: 1.5cqw; width: 100%; }
 .app-title {
   font-family: 'Manrope', sans-serif;
-  font-size: 1.85cqw;
+  font-size: clamp(17px, 1.85cqw, 27px);
   font-weight: 500;
   color: var(--text);
   letter-spacing: -0.01em;
-  white-space: nowrap; flex-shrink: 0;
+  white-space: nowrap; flex-shrink: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis;
 }
+.header-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* Header buttons: sign out, language */
+.header-btn {
+  padding: 7px 13px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  color: var(--sas-lo);
+  background: rgba(0,114,206,0.08);
+  border: 1px solid rgba(0,114,206,0.22);
+  cursor: pointer; transition: all 0.15s;
+  white-space: nowrap;
+}
+.header-btn:hover:not(:disabled) { background: var(--sas); color: #fff; border-color: var(--sas); }
+.header-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* Connection status pill (header right) */
 .status-pill {
@@ -218,7 +233,7 @@ html, body {
   color: var(--text);
   text-transform: uppercase;
   padding-left: 8px;
-  border-left: 2px solid var(--gold);
+  border-left: 2px solid var(--sas);
   line-height: 1.25;
   box-shadow: -1px 0 0 rgba(0,114,206,0.15);
 }
@@ -226,7 +241,7 @@ html, body {
 /* ═══ Header accent line (the reports' .red-line, SAS blue) ═══ */
 .accent-line {
   flex: 1; min-width: 0; height: 1px;
-  background: linear-gradient(90deg, var(--gold-hi) 0%, var(--gold) 50%, rgba(0,114,206,0.4) 80%, transparent 100%);
+  background: linear-gradient(90deg, var(--sas-hi) 0%, var(--sas) 50%, rgba(0,114,206,0.4) 80%, transparent 100%);
   box-shadow: 0 0 6px rgba(0,114,206,0.25);
 }
 
@@ -243,7 +258,7 @@ html, body {
   background: var(--glass-strong);
   backdrop-filter: blur(12px);
   border: 1px solid var(--hairline);
-  border-left: 3px solid var(--gold);
+  border-left: 3px solid var(--sas);
   border-radius: 14px;
   border-top-left-radius: 4px;
   box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 4px 10px rgba(15,23,42,0.05);
@@ -255,31 +270,6 @@ html, body {
   border-radius: 14px;
   border-top-right-radius: 4px;
 }
-
-/* ═══ Suggestion chips — styled like the dashboards' time pills ═══ */
-.suggestion-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 13px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(240,246,252,0.7));
-  border: 1px solid rgba(15,23,42,0.10);
-  border-radius: 999px;
-  font-size: 12px; font-weight: 600;
-  color: var(--text-md);
-  cursor: pointer; transition: all 0.18s;
-  box-shadow: 0 1px 2px rgba(15,23,42,0.06), inset 0 1px 0 rgba(255,255,255,0.9);
-}
-.suggestion-chip:hover {
-  background: var(--gold);
-  color: white;
-  border-color: var(--gold);
-  transform: translateY(-1px);
-  box-shadow: 0 3px 10px rgba(0,114,206,0.25);
-}
-.suggestion-chip .chip-tag {
-  font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em;
-  color: var(--gold);
-}
-.suggestion-chip:hover .chip-tag { color: rgba(255,255,255,0.8); }
 
 /* ═══ Reasoning trace ═══ */
 .trace-panel {
@@ -333,7 +323,7 @@ html, body {
 /* ═══ MapCard — interactive TomTom map, SAS-themed ═══ */
 .mc-wrap { margin-top: 8px; max-width: 100%; }
 .mc-title {
-  font-size: 12.5px; font-weight: 700; color: var(--gold);
+  font-size: 12.5px; font-weight: 700; color: var(--sas);
   margin: 0 2px 6px; letter-spacing: 0.01em;
 }
 .mc-frame {
@@ -386,7 +376,7 @@ html, body {
   font-family: inherit;
 }
 .mc-popup .maplibregl-popup-tip { display: none; }
-.mc-pop-title { font-size: 12.5px; font-weight: 700; color: var(--gold); margin-bottom: 3px; }
+.mc-pop-title { font-size: 12.5px; font-weight: 700; color: var(--sas); margin-bottom: 3px; }
 .mc-pop-row { font-size: 11.5px; color: var(--text-md); line-height: 1.5; }
 .mc-pop-row .mc-k { color: var(--text-faint); font-weight: 600; margin-right: 4px; }
 .mc-popup .maplibregl-popup-close-button { color: var(--text-faint); font-size: 15px; padding: 2px 6px; }
@@ -397,3 +387,80 @@ html, body {
   box-shadow: 0 2px 8px rgba(15,23,42,0.12);
   border: 1px solid var(--glass-border);
 }
+
+/* ═══ ChartCard — interactive render_chart spec, SAS-themed ═══ */
+.cc-wrap { margin-top: 8px; max-width: 100%; }
+.cc-title {
+  font-size: 12.5px; font-weight: 700; color: var(--sas);
+  margin: 0 2px 2px; letter-spacing: 0.01em;
+}
+.cc-sub { font-size: 11px; color: var(--text-dim); margin: 0 2px 6px; }
+.cc-plot {
+  position: relative;
+  border-radius: 14px;
+  background: var(--glass-strong);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  padding: 10px 12px 6px;
+  direction: ltr;
+}
+.cc-svg { width: 100%; height: auto; display: block; }
+.cc-tip {
+  position: absolute; pointer-events: none; z-index: 5;
+  transform: translate(14px, -50%);
+  min-width: 120px; padding: 7px 9px; border-radius: 10px;
+  background: rgba(255,255,255,0.96);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--glass-shadow-lg);
+  font-size: 11.5px;
+}
+.cc-tip.cc-tip-flip { transform: translate(calc(-100% - 14px), -50%); }
+.cc-tip-label { font-weight: 700; color: var(--text); margin-bottom: 3px; }
+.cc-tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.6; }
+.cc-tip-dot { width: 9px; height: 9px; border-radius: 999px; flex: none; }
+.cc-tip-name { color: var(--text-md); margin-right: auto; padding-right: 8px; }
+.cc-tip-val { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.cc-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  margin: 8px 2px 2px; font-size: 11px; color: var(--text-md);
+  direction: ltr;
+}
+.cc-leg-item { display: inline-flex; align-items: center; gap: 5px; }
+.cc-leg-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+/* ═══ Arabic (right-to-left) ═══
+   The language toggle sets dir="rtl" on <html>; layout utilities in the
+   components are logical (ps-/pe-/ms-/text-start), so most of the page mirrors
+   by itself. These are the pieces that carry a physical side. */
+html[dir="rtl"], html[dir="rtl"] body,
+html[dir="rtl"] button, html[dir="rtl"] input, html[dir="rtl"] textarea {
+  font-family: 'IBM Plex Sans Arabic', 'Manrope', 'Segoe UI', Tahoma, sans-serif;
+}
+html[dir="rtl"] .app-title { letter-spacing: 0; font-family: 'IBM Plex Sans Arabic', 'Manrope', sans-serif; }
+html[dir="rtl"] .accent-line {
+  background: linear-gradient(270deg, var(--sas-hi) 0%, var(--sas) 50%, rgba(0,114,206,0.4) 80%, transparent 100%);
+}
+html[dir="rtl"] .panel-title {
+  letter-spacing: 0;
+  padding-left: 0; padding-right: 8px;
+  border-left: none; border-right: 2px solid var(--sas);
+  box-shadow: 1px 0 0 rgba(0,114,206,0.15);
+}
+html[dir="rtl"] .trace-header { letter-spacing: 0; }
+/* Chat bubbles: the accent edge and the "tail" corner follow the reading side */
+html[dir="rtl"] .msg-bot-bubble {
+  border-left: 1px solid var(--hairline);
+  border-right: 3px solid var(--sas);
+  border-top-left-radius: 14px;
+  border-top-right-radius: 4px;
+}
+html[dir="rtl"] .msg-user-bubble {
+  border-top-right-radius: 14px;
+  border-top-left-radius: 4px;
+}
+/* The send arrow points into the reading direction */
+html[dir="rtl"] .send-icon { transform: scaleX(-1); }
+/* Code, traces and identifiers stay left-to-right inside the Arabic UI */
+html[dir="rtl"] pre, html[dir="rtl"] code, html[dir="rtl"] .font-mono { direction: ltr; text-align: left; }
+html[dir="rtl"] .mc-frame { direction: ltr; }

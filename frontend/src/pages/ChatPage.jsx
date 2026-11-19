@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChat } from '../context/ChatContext';
+import { useLanguage } from '../context/LanguageContext';
 import ResponseCard from '../components/ResponseCard';
 import SourceViewer from '../components/SourceViewer';
 import QueryDetails from '../components/QueryDetails';
@@ -8,6 +9,8 @@ import VoiceInput from '../components/VoiceInput';
 import { getAgents, getCollections, submitQuery, getQueryStatus, getQueryTrace, extractAttachment } from '../services/api';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const hideOnError = (e) => { e.target.style.display = 'none'; };
+const ATTACH_TYPES = '.pdf,.docx,.txt,.md,.csv,.json,.log,.xml,.html,.yaml,.yml,.sas,.sql,.py';
 
 // Flatten a trace into display steps for the live activity indicator
 function traceSteps(trace) {
@@ -19,17 +22,33 @@ function traceSteps(trace) {
   ];
 }
 
+const AttachIcon = ({ size = 12 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+  </svg>
+);
+
+const AssistantAvatar = () => (
+  <div className="w-8 h-8 rounded-lg shrink-0 flex items-center justify-center p-1"
+    style={{ background: 'var(--nav-grad)', border: '1px solid rgba(59,155,232,0.3)' }}>
+    <img src="/sas_logo.png" alt="" className="w-full h-full object-contain" onError={hideOnError} />
+  </div>
+);
+
+/** The chat: recent conversations · agent dropdown · messages · input. */
 export default function ChatPage() {
+  const { t, lang } = useLanguage();
   const { chats, activeChat, activeChatId, setActiveChatId, addMessage, setChatSession, renameChat, deleteChat, createNewChat } = useChat();
   const messages = activeChat?.messages || [];
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [liveTrace, setLiveTrace] = useState(null);   // tool/LLM/RAG calls while a query runs
-  const [details, setDetails] = useState(null);       // { data, query } for the details popup
+  const [pendingChat, setPendingChat] = useState(null); // id of the chat waiting for an answer
+  const [liveTrace, setLiveTrace] = useState(null);     // tool/LLM/RAG calls while a query runs
+  const [details, setDetails] = useState(null);         // { data, query } for the details popup
   const [source, setSource] = useState(null);
   const [chatMenu, setChatMenu] = useState(null);
   const [renamingChat, setRenamingChat] = useState(null);
   const [renameValue, setRenameValue] = useState('');
+  const loading = pendingChat != null;
 
   // RAM targets (agents + collections) for the dropdown
   const [agents, setAgents] = useState([]);
@@ -69,7 +88,7 @@ export default function ChatPage() {
       setAgents(agentList);
       setCollections(collList);
       if (a.status === 'rejected' && c.status === 'rejected') {
-        setTargetsError(a.reason?.message || 'Could not reach the assistant service');
+        setTargetsError(a.reason?.message || 'Could not reach RAM');
       } else if (agentList.length > 0) {
         // Default to the first published agent
         setTarget({ type: 'agent', id: agentList[0].id, name: agentList[0].name });
@@ -85,21 +104,22 @@ export default function ChatPage() {
   const send = async (text) => {
     const q = (text || input).trim();
     if (!q || loading) return;
+    const chatId = activeChatId;
     if (!target) {
-      addMessage(activeChatId, { role: 'assistant', type: 'text', content: 'Select an agent from the dropdown first.', isError: true });
+      addMessage(chatId, { role: 'assistant', type: 'text', content: t('selectAgentFirst'), isError: true });
       return;
     }
     setInput('');
     const attached = attachment;
     setAttachment(null);
     setAttachError(null);
-    addMessage(activeChatId, { role: 'user', type: 'text', content: q, attachmentName: attached?.name });
-    setLoading(true);
+    addMessage(chatId, { role: 'user', type: 'text', content: q, attachmentName: attached?.name });
+    setPendingChat(chatId);
     setLiveTrace(null);
     try {
       const sub = await submitQuery(q, target, activeChat?.sessionId || null,
-        attached ? [{ name: attached.name, text: attached.text }] : null);
-      if (sub.querySessionId) setChatSession(activeChatId, sub.querySessionId, target);
+        attached ? [{ name: attached.name, text: attached.text }] : null, lang);
+      if (sub.querySessionId) setChatSession(chatId, sub.querySessionId, target);
 
       let res = sub.result;
       if (!res) {
@@ -107,29 +127,47 @@ export default function ChatPage() {
         // calls RAM has recorded so far as live activity under the indicator.
         const interval = Math.max((sub.pollInterval || 2) * 1000, 1000);
         const deadline = Date.now() + (sub.timeout || 600) * 1000;
+        let consecutiveErrors = 0;
+        let tick = 0;
         for (;;) {
           await sleep(interval);
-          getQueryTrace(sub.queryId).then(setLiveTrace).catch(() => {});
-          const st = await getQueryStatus(sub.queryId);
+          // The live trace is three RAM calls; fetching it every other tick
+          // halves that traffic without a visible difference.
+          if (tick++ % 2 === 0) getQueryTrace(sub.queryId).then(setLiveTrace).catch(() => {});
+          let st;
+          try {
+            st = await getQueryStatus(sub.queryId);
+            consecutiveErrors = 0;
+          } catch (e) {
+            // A single failed poll (a brief backend/gateway drop) shouldn't kill
+            // the turn: the query is still running on RAM. Keep polling; give
+            // up only after several in a row.
+            if (++consecutiveErrors >= 5) throw e;
+            if (Date.now() >= deadline)
+              throw new Error(t('agentTimeout', { n: sub.timeout || 600 }));
+            continue;
+          }
           if (st.done) { res = st.result; break; }
           if (Date.now() >= deadline)
-            throw new Error(`RAM did not answer within ${sub.timeout || 600}s — the query may still be running on the server.`);
+            throw new Error(t('agentTimeout', { n: sub.timeout || 600 }));
         }
       }
 
       if (res.errorCode && res.errorCode !== 0) {
-        addMessage(activeChatId, { role: 'assistant', type: 'text', content: `RAM error: ${res.errorText || 'query failed'}`, isError: true });
+        addMessage(chatId, { role: 'assistant', type: 'text', content: `${t('agentErrorPrefix')} ${res.errorText || 'query failed'}`, isError: true });
       } else {
-        // Pull the final trace — its tool-call *outputs* carry payloads (like the
-        // tomtom-render-map spec) that RAM's embedded response.toolCalls omits.
+        // Pull the final trace: its tool-call *outputs* carry payloads (chart,
+        // report and map specs) that the inline response.toolCalls may omit.
         let trace = null;
         try { trace = await getQueryTrace(res.queryId || sub.queryId); } catch { /* best-effort */ }
-        addMessage(activeChatId, { role: 'assistant', type: 'structured', data: trace ? { ...res, trace } : res, query: q });
+        addMessage(chatId, { role: 'assistant', type: 'structured', data: trace ? { ...res, trace } : res, query: q });
       }
     } catch (err) {
-      addMessage(activeChatId, { role: 'assistant', type: 'text', content: `Error: ${err.message}`, isError: true });
+      addMessage(chatId, { role: 'assistant', type: 'text', content: `${t('errorPrefix')} ${err.message}`, isError: true });
+      // Lost session: let the header restore it (or show Sign in) right away.
+      if (/not signed in/i.test(err.message)) window.dispatchEvent(new Event('ram:signin-required'));
     }
-    setLoading(false);
+    setPendingChat(null);
     setLiveTrace(null);
     inputRef.current?.focus();
   };
@@ -138,7 +176,7 @@ export default function ChatPage() {
   const finishRename = (id) => { if (renameValue.trim()) renameChat(id, renameValue.trim()); setRenamingChat(null); };
 
   // Scope "Recent conversations" to the selected agent/collection. Chats with
-  // no recorded target (brand-new local ones, or sessions RAM couldn't
+  // no recorded target (brand-new local ones, or sessions the server couldn't
   // attribute) stay visible everywhere.
   const visibleChats = chats.filter(chat => {
     if (!target) return true;
@@ -157,13 +195,15 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
 
+  const titleOf = (chat) => (chat?.title && chat.title !== 'New conversation') ? chat.title : t('newConversationTitle');
+
   return (
     <div className="h-full flex gap-4 p-4">
 
-      {/* Chat history panel (left) — past RAM query sessions + local chats */}
+      {/* Chat history panel — past RAM query sessions + local chats */}
       <div className="w-[260px] shrink-0 glass-card flex flex-col">
         <div className="p-4 border-b border-[rgba(15,23,42,0.07)]">
-          <p className="panel-title">Recent conversations</p>
+          <p className="panel-title">{t('recentConversations')}</p>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {visibleChats.map(chat => {
@@ -176,25 +216,26 @@ export default function ChatPage() {
                     <input value={renameValue} onChange={e => setRenameValue(e.target.value)}
                       onBlur={() => finishRename(chat.id)} onKeyDown={e => e.key === 'Enter' && finishRename(chat.id)} autoFocus
                       className="w-full rounded-lg px-2 py-1.5 text-xs border outline-none"
-                      style={{ background: 'rgba(255,255,255,0.5)', borderColor: 'var(--gold-hi)', color: 'var(--text)' }} />
+                      style={{ background: 'rgba(255,255,255,0.5)', borderColor: 'var(--sas-hi)', color: 'var(--text)' }} />
                   </div>
                 ) : (
                   <div className="flex items-center">
                     <button onClick={() => setActiveChatId(chat.id)}
-                      className={`flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs text-left truncate transition-all ${
+                      className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs text-start truncate transition-all ${
                         chat.id === activeChatId
                           ? 'font-semibold'
                           : 'hover:bg-[rgba(0,114,206,0.05)] border border-transparent'
                       }`}
                       style={chat.id === activeChatId
-                        ? { color: 'var(--gold-lo)', background: 'rgba(0,114,206,0.14)', border: '1px solid rgba(0,114,206,0.30)', borderLeft: '3px solid var(--gold)' }
+                        ? { color: 'var(--sas-lo)', background: 'rgba(0,114,206,0.14)', border: '1px solid rgba(0,114,206,0.30)', borderInlineStart: '3px solid var(--sas)' }
                         : { color: 'var(--text-md)' }
                       }>
                       <span className="text-sm">💬</span>
-                      <span className="truncate flex-1">{chat.title}</span>
+                      <span className="truncate flex-1" dir="auto">{titleOf(chat)}</span>
                     </button>
                     <button onClick={e => { e.stopPropagation(); setChatMenu(menuOpen ? null : chat.id); }}
-                      className="p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-[rgba(0,114,206,0.1)] transition-all shrink-0 ml-0.5"
+                      aria-label={`${t('rename')} / ${t('delete')}`}
+                      className="p-1 rounded-md opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-[rgba(0,114,206,0.1)] transition-all shrink-0 ms-0.5"
                       style={{ color: 'var(--text-faint)' }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>
@@ -205,13 +246,13 @@ export default function ChatPage() {
                 {menuOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setChatMenu(null)} />
-                    <div className="absolute right-0 top-full mt-0.5 rounded-xl shadow-xl overflow-hidden z-50 min-w-[130px] animate-fade-up"
+                    <div className="absolute end-0 top-full mt-0.5 rounded-xl shadow-xl overflow-hidden z-50 min-w-[130px] animate-fade-up"
                       style={{ background: 'rgba(255,255,255,0.96)', border: '1px solid rgba(0,114,206,0.2)', backdropFilter: 'blur(20px)' }}>
                       <button onClick={() => startRename(chat)} className="w-full flex items-center gap-2 px-3 py-2 text-[11px] hover:bg-[rgba(0,114,206,0.05)]" style={{ color: 'var(--text-md)' }}>
-                        Rename
+                        {t('rename')}
                       </button>
                       <button onClick={() => { deleteChat(chat.id); setChatMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-[11px] hover:bg-[var(--red-bg)]" style={{ color: 'var(--red)' }}>
-                        Delete
+                        {t('delete')}
                       </button>
                     </div>
                   </>
@@ -223,21 +264,21 @@ export default function ChatPage() {
         <div className="p-3 border-t border-[rgba(15,23,42,0.07)]">
           <button onClick={() => { createNewChat(); }}
             className="w-full py-2.5 rounded-lg text-xs font-bold transition-all"
-            style={{ border: '2px dashed rgba(0,114,206,0.35)', color: 'var(--gold)', background: 'rgba(0,114,206,0.03)' }}>
-            + New conversation
+            style={{ border: '2px dashed rgba(0,114,206,0.35)', color: 'var(--sas)', background: 'rgba(0,114,206,0.03)' }}>
+            {t('newConversation')}
           </button>
         </div>
       </div>
 
       {/* Main chat area */}
-      <div className="flex-1 glass-card flex flex-col relative" style={{ boxShadow: 'var(--glass-shadow-lg)' }}>
-        <img src="/sas_logo.png" alt="" className="chat-watermark" onError={e => e.target.style.display='none'} />
+      <div className="flex-1 min-w-0 glass-card flex flex-col relative" style={{ boxShadow: 'var(--glass-shadow-lg)' }}>
+        <img src="/sas_logo.png" alt="" className="chat-watermark" onError={hideOnError} />
 
         {/* Header: conversation title + agent dropdown */}
-        <div className="flex items-center justify-between px-6 py-3 border-b border-[rgba(15,23,42,0.07)] relative z-[5]">
+        <div className="flex items-center justify-between gap-3 px-6 py-3 border-b border-[rgba(15,23,42,0.07)] relative z-[5]">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="w-[3px] h-4 rounded shrink-0" style={{ background: 'var(--gold-grad)' }} />
-            <span className="text-sm font-bold truncate" style={{ color: 'var(--text)' }}>{activeChat?.title || 'New conversation'}</span>
+            <span className="w-[3px] h-4 rounded shrink-0" style={{ background: 'var(--sas-grad)' }} />
+            <span className="text-sm font-bold truncate" dir="auto" style={{ color: 'var(--text)' }}>{titleOf(activeChat)}</span>
           </div>
           <TargetSelector agents={agents} collections={collections} target={target}
             onChange={setTarget} loading={targetsLoading} error={targetsError} />
@@ -249,60 +290,52 @@ export default function ChatPage() {
             <div key={i} className={`flex gap-2.5 animate-fade-up ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
               {/* Avatar */}
               {msg.role === 'user' ? (
-                <div className="w-8 h-8 rounded-lg shrink-0 flex items-center justify-center text-xs font-bold"
-                  style={{ background: 'rgba(0,114,206,0.12)', border: '1px solid rgba(0,114,206,0.28)', color: 'var(--gold-lo)' }}>
-                  You
+                <div className="w-8 h-8 rounded-lg shrink-0 flex items-center justify-center text-[10px] font-bold"
+                  style={{ background: 'rgba(0,114,206,0.12)', border: '1px solid rgba(0,114,206,0.28)', color: 'var(--sas-lo)' }}>
+                  {t('you')}
                 </div>
               ) : (
-                <div className="w-8 h-8 rounded-lg shrink-0 flex items-center justify-center p-1"
-                  style={{ background: 'var(--nav-grad)', border: '1px solid rgba(59,155,232,0.3)' }}>
-                  <img src="/sas_logo.png" alt="Assistant" className="w-full h-full object-contain" />
-                </div>
+                <AssistantAvatar />
               )}
               {/* Bubble */}
-              <div className="max-w-[70%]">
+              <div className="max-w-[70%] min-w-0">
                 {msg.type === 'structured' ? (
                   <ResponseCard data={msg.data} onOpenSource={(doc) => setSource(doc)}
                     onOpenDetails={(d) => setDetails({ data: d, query: msg.query })} />
                 ) : (
-                  <div className={`px-4 py-3 text-[13px] leading-[1.75] ${
+                  <div className={`px-4 py-3 text-[13px] leading-[1.75] whitespace-pre-wrap break-words ${
                     msg.role === 'user' ? 'msg-user-bubble' : 'msg-bot-bubble'
                   } ${msg.isError ? 'text-[var(--red)]' : ''}`}
                     style={{ color: msg.isError ? undefined : 'var(--text)' }}>
                     {msg.attachmentName && (
                       <div className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded-md text-[11px] font-semibold w-fit"
-                        style={{ background: 'rgba(0,114,206,0.10)', border: '1px solid rgba(0,114,206,0.22)', color: 'var(--gold-lo)' }}>
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                          <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-                        </svg>
+                        style={{ background: 'rgba(0,114,206,0.10)', border: '1px solid rgba(0,114,206,0.22)', color: 'var(--sas-lo)' }}>
+                        <AttachIcon size={11} />
                         {msg.attachmentName}
                       </div>
                     )}
-                    {msg.content}
+                    <span dir="auto" className="block">{msg.type === 'welcome' ? t('welcome') : msg.content}</span>
                   </div>
                 )}
               </div>
             </div>
           ))}
 
-          {loading && (() => {
+          {pendingChat === activeChatId && (() => {
             const steps = traceSteps(liveTrace);
             return (
               <div className="flex gap-2.5 animate-fade-up">
-                <div className="w-8 h-8 rounded-lg shrink-0 flex items-center justify-center p-1"
-                  style={{ background: 'var(--nav-grad)', border: '1px solid rgba(59,155,232,0.3)' }}>
-                  <img src="/sas_logo.png" alt="Assistant" className="w-full h-full object-contain" />
-                </div>
+                <AssistantAvatar />
                 <div className="msg-bot-bubble px-4 py-3 min-w-[180px]">
                   {/* Live agent activity — tool/LLM/RAG calls recorded so far */}
                   {steps.length > 0 && (
                     <div className="mb-2.5 space-y-1.5">
                       {steps.slice(-6).map((s, i, arr) => (
                         <div key={s.key} className="flex items-center gap-2 text-[11.5px] animate-fade-up"
-                          style={{ color: i === arr.length - 1 ? 'var(--gold-lo)' : 'var(--text-dim)' }}>
+                          style={{ color: i === arr.length - 1 ? 'var(--sas-lo)' : 'var(--text-dim)' }}>
                           <span className="text-[10px] w-4 text-center shrink-0">{s.icon}</span>
-                          <span className="truncate font-medium">{s.label}</span>
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="3" className="shrink-0 ml-auto">
+                          <span className="truncate font-medium" dir="ltr">{s.label}</span>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="3" className="shrink-0 ms-auto">
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         </div>
@@ -313,12 +346,12 @@ export default function ChatPage() {
                     <div className="flex gap-1.5">
                       {[0, 1, 2].map(j => (
                         <span key={j} className="w-1.5 h-1.5 rounded-full"
-                          style={{ background: 'var(--gold)', opacity: 0.3, animation: `pop 1.4s ease-in-out infinite ${j * 0.15}s` }} />
+                          style={{ background: 'var(--sas)', opacity: 0.3, animation: `pop 1.4s ease-in-out infinite ${j * 0.15}s` }} />
                       ))}
                     </div>
                     {steps.length > 0 && (
                       <span className="text-[10px]" style={{ color: 'var(--text-faint)' }}>
-                        {steps.length} step{steps.length !== 1 ? 's' : ''} so far
+                        {t('stepsSoFar', { n: steps.length, s: steps.length !== 1 ? 's' : '' })}
                       </span>
                     )}
                   </div>
@@ -336,26 +369,24 @@ export default function ChatPage() {
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11.5px]"
                 style={{ background: 'var(--red-bg)', border: '1px solid rgba(185,28,44,0.22)', color: 'var(--red)' }}>
                 {attachError}
-                <button onClick={() => setAttachError(null)} className="font-bold hover:opacity-70">✕</button>
+                <button onClick={() => setAttachError(null)} className="font-bold hover:opacity-70" aria-label={t('close')}>✕</button>
               </div>
             ) : attaching ? (
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11.5px]"
                 style={{ background: 'rgba(0,114,206,0.07)', border: '1px solid rgba(0,114,206,0.20)', color: 'var(--text-dim)' }}>
-                <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--gold)' }} />
-                Reading document…
+                <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--sas)' }} />
+                {t('readingDocument')}
               </div>
             ) : (
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold"
-                style={{ background: 'rgba(0,114,206,0.08)', border: '1px solid rgba(0,114,206,0.25)', color: 'var(--gold-lo)' }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-                </svg>
+                style={{ background: 'rgba(0,114,206,0.08)', border: '1px solid rgba(0,114,206,0.25)', color: 'var(--sas-lo)' }}>
+                <AttachIcon size={12} />
                 {attachment.name}
                 <span className="font-normal" style={{ color: 'var(--text-dim)' }}>
-                  {attachment.truncated ? `first ${Math.round(attachment.text.length / 1000)}k chars` : `${(attachment.chars / 1000).toFixed(1)}k chars`}
-                  {' '}· sent with your next question
+                  {attachment.truncated ? t('firstKChars', { n: Math.round(attachment.text.length / 1000) }) : t('kChars', { n: (attachment.chars / 1000).toFixed(1) })}
+                  {' '}{t('sentWithNext')}
                 </span>
-                <button onClick={() => setAttachment(null)} className="font-bold hover:opacity-70" style={{ color: 'var(--text-dim)' }}>✕</button>
+                <button onClick={() => setAttachment(null)} className="font-bold hover:opacity-70" style={{ color: 'var(--text-dim)' }} aria-label={t('close')}>✕</button>
               </div>
             )}
           </div>
@@ -363,33 +394,31 @@ export default function ChatPage() {
 
         {/* Input bar */}
         <div className="px-5 pb-4 pt-2 relative z-[1]">
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl border border-[rgba(15,23,42,0.10)] transition-all focus-within:border-[var(--gold-hi)] focus-within:shadow-[0_0_0_3px_rgba(0,114,206,0.10)]"
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl border border-[rgba(15,23,42,0.10)] transition-all focus-within:border-[var(--sas-hi)] focus-within:shadow-[0_0_0_3px_rgba(0,114,206,0.10)]"
             style={{ background: 'var(--glass-strong)', backdropFilter: 'blur(12px)' }}>
             {/* Attach document */}
-            <input ref={fileRef} type="file" className="hidden" onChange={pickFile}
-              accept=".pdf,.docx,.txt,.md,.csv,.json,.log,.xml,.html,.yaml,.yml,.sas,.sql,.py" />
+            <input ref={fileRef} type="file" className="hidden" onChange={pickFile} accept={ATTACH_TYPES} />
             <button onClick={() => fileRef.current?.click()} disabled={attaching}
-              title="Attach a document (PDF, DOCX, TXT, CSV…) — its text is sent with your question"
+              title={t('attachTooltip')} aria-label={t('attachTooltip')}
               className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all hover:bg-[rgba(0,114,206,0.08)] disabled:opacity-40"
-              style={{ color: attachment ? 'var(--gold)' : 'var(--text-dim)' }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-              </svg>
+              style={{ color: attachment ? 'var(--sas)' : 'var(--text-dim)' }}>
+              <AttachIcon size={15} />
             </button>
 
-            <VoiceInput onTranscript={text => send(text)} disabled={loading} />
+            <VoiceInput onTranscript={text => send(text)} disabled={loading} lang={lang} title={t('speakTooltip')} />
 
-            <textarea ref={inputRef} rows="1" value={input}
+            <textarea ref={inputRef} rows="1" value={input} dir="auto"
               onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder={target ? `Ask ${target.name} anything…` : 'Select an agent above, then ask anything…'}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
+              placeholder={target ? t('askAnything', { name: target.name }) : t('selectThenAsk')}
               className="flex-1 bg-transparent border-none outline-none text-[13px] py-2 px-2 resize-none leading-relaxed"
-              style={{ fontFamily: 'Manrope, sans-serif', color: 'var(--text)' }} />
+              style={{ fontFamily: 'inherit', color: 'var(--text)' }} />
 
-            <button onClick={() => send()}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 hover:scale-105 transition-transform"
-              style={{ background: 'var(--gold-grad)', boxShadow: '0 3px 12px rgba(0,114,206,0.30)' }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <button onClick={() => send()} disabled={loading} title={t('send')} aria-label={t('send')}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
+              style={{ background: 'var(--sas-grad)', boxShadow: '0 3px 12px rgba(0,114,206,0.30)' }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+                className="send-icon">
                 <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
               </svg>
             </button>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
+import { useLanguage } from '../context/LanguageContext';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 /*
@@ -12,6 +13,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
  * Basemap: by default a light TomTom raster basemap (reliable, needs only an
  * API key). Set VITE_MAP_STYLE_URL to a TomTom vector style for 3D buildings /
  * full theming. Configure VITE_TOMTOM_API_KEY for tiles + traffic.
+ *
+ * These are build-time settings: frontend/.env.local for `npm run dev`, a build
+ * argument for the Docker image (on Railway, a service variable of that name).
  */
 
 const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY || '';
@@ -91,6 +95,7 @@ function popupHtml(title, rows) {
 }
 
 export default function MapCard({ spec }) {
+  const { t } = useLanguage();
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const [trafficOn, setTrafficOn] = useState(!!spec?.showTraffic);
@@ -270,8 +275,7 @@ export default function MapCard({ spec }) {
     return (
       <div className="mc-frame mc-empty" style={{ height: 200 }}>
         <div style={{ color: 'var(--text-dim)', fontSize: 12, textAlign: 'center', padding: 16 }}>
-          🗺️ Map ready — set <code>VITE_TOMTOM_API_KEY</code> (or <code>VITE_MAP_STYLE_URL</code>) in the
-          frontend env to render it.
+          {t('mapNeedsKey')}
         </div>
       </div>
     );
