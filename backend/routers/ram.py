@@ -1,14 +1,42 @@
-"""API routes the frontend calls. Thin layer over services.ram."""
+"""API routes the frontend calls (all under /api). Thin layer over services.ram:
+the browser never talks to RAM directly."""
 from __future__ import annotations
 
 import io
+import secrets
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File
 from pydantic import BaseModel
 
 from services import ram
 
-router = APIRouter(prefix="/api", tags=["ram"])
+# Each browser carries its own RAM identity: an HttpOnly cookie names the
+# session the client keeps that browser's tokens under. Set on the first call
+# (the health check), read on every call after.
+SESSION_COOKIE = "ram_sid"
+SESSION_MAX_AGE = 60 * 60 * 24 * 30
+
+
+COOKIE_PATH = "/api"
+
+
+def _is_https(request: Request) -> bool:
+    # Behind a TLS-terminating proxy (Railway, Render, Fly…) the app itself is
+    # reached over plain HTTP; the proxy says what the browser used.
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    return (proto or request.url.scheme) == "https"
+
+
+async def _bind_session(request: Request, response: Response) -> None:
+    sid = request.cookies.get(SESSION_COOKIE)
+    if not sid or len(sid) < 16:
+        sid = secrets.token_urlsafe(24)
+        response.set_cookie(SESSION_COOKIE, sid, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax",
+                            secure=_is_https(request), path=COOKIE_PATH)
+    ram.set_session_id(sid)
+
+
+router = APIRouter(prefix="/api", tags=["ram"], dependencies=[Depends(_bind_session)])
 
 # Attached documents are inlined into the query text — keep them inside a
 # sane prompt budget for the agent's LLM.
@@ -26,10 +54,17 @@ class QueryRequest(BaseModel):
     collectionIds: list[str] | None = None
     querySessionId: str | None = None
     attachments: list[Attachment] | None = None
+    # UI language ("en" / "ar"). Informational: RAM agents decide the answer
+    # language themselves (they follow the question), so it is not sent on.
+    language: str | None = "en"
 
 
 class AuthCode(BaseModel):
     code: str
+
+
+class SavedSession(BaseModel):
+    session: dict
 
 
 def _wrap(coro):
@@ -56,14 +91,45 @@ async def auth_device_start():
 
 @router.post("/auth/device/poll")
 async def auth_device_poll():
-    return await _wrap(ram.device_poll())
+    res = await _wrap(ram.device_poll())
+    if res.get("ok"):
+        res["session"] = ram.export_session()
+    return res
 
 
 @router.post("/auth/viya/code")
 async def auth_viya_code(body: AuthCode):
     if not body.code.strip():
         raise HTTPException(status_code=400, detail="Paste the authorization code first.")
-    return await _wrap(ram.viya_code_exchange(body.code))
+    res = await _wrap(ram.viya_code_exchange(body.code))
+    if res.get("ok"):
+        res["session"] = ram.export_session()
+    return res
+
+
+@router.post("/auth/signout")
+async def auth_signout(response: Response):
+    """Sign this browser out of RAM: revoke and forget its session, and drop
+    the session cookie so the next visit starts a fresh identity."""
+    res = await _wrap(ram.sign_out())
+    response.delete_cookie(SESSION_COOKIE, path=COOKIE_PATH)
+    return res
+
+
+@router.get("/auth/session")
+async def auth_session():
+    """This browser's own copy of its session (see /auth/restore). The page
+    fetches it again whenever /health reports a newer `sessionStamp`, i.e. the
+    identity provider has issued a new refresh token since the copy was saved."""
+    return {"session": ram.export_session()}
+
+
+@router.post("/auth/restore")
+async def auth_restore(body: SavedSession):
+    """Hand back the session this browser saved after signing in, so a
+    backend that restarted on a fresh container picks it up without a new
+    sign-in. Validated with the identity provider before it is accepted."""
+    return await _wrap(ram.restore_session(body.session))
 
 
 # ─── Attachments (ad-hoc documents, inlined into the query) ─────────
@@ -127,8 +193,17 @@ async def sessions():
 
 
 @router.get("/sessions/{session_id}/queries")
-async def session_queries(session_id: str):
-    return await _wrap(ram.list_session_queries(session_id))
+async def session_queries(session_id: str, raw: bool = False):
+    """The session's turns, oldest first. `?raw=1` returns the shape of RAM's
+    query records instead (keys, per-item timestamp, order as returned)."""
+    return await _wrap(ram.list_session_queries(session_id, raw=raw))
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a query session in RAM itself — the conversation is removed
+    from RAM's history, not just hidden in this browser."""
+    return await _wrap(ram.delete_session(session_id))
 
 
 @router.post("/query")

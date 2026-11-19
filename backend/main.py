@@ -1,74 +1,130 @@
 """
-SAS RAM Chat UI — FastAPI backend.
+SAS Retrieval Agent Assistant — FastAPI backend.
 
 Local dev:
-    uvicorn main:app --reload --port 8000
+    uvicorn main:app --reload --port 8000        (frontend: npm run dev, on :5173)
 
-Production (Docker):
+Production (Docker / Railway):
     uvicorn main:app --host 0.0.0.0 --port $PORT
-    Frontend is pre-built at ../frontend/dist and served from "/".
+    The Dockerfile builds the frontend into ../frontend/dist and this app serves
+    it from "/", so the whole thing is one service on one port.
 
-See backend/.env.example for the RAM connection settings.
+Settings come from the process environment (the Variables tab on Railway) or,
+for a local run, from backend/.env. See backend/.env.example.
 """
 from __future__ import annotations
+
+import asyncio
+import logging
 import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parent
+# Before the service import below: it reads its settings at import time. Real
+# environment variables win over the file, so a stray .env never overrides Railway.
+load_dotenv(BACKEND_DIR / ".env")
 
-from routers import ram as ram_router
-from services import ram as ram_service
+from routers import ram as ram_router  # noqa: E402
+from services import ram as ram_service  # noqa: E402
+
+log = logging.getLogger("uvicorn.error")
+FRONTEND_DIST = (BACKEND_DIR.parent / "frontend" / "dist").resolve()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log.info("RAM connection: %s", ram_service.status())
+    if FRONTEND_DIST.is_dir():
+        log.info("Serving the frontend from %s", FRONTEND_DIST)
+    else:
+        log.info("No frontend build at %s: API only (run the Vite dev server on :5173)", FRONTEND_DIST)
+    # Refresh every signed-in RAM session before it expires, for as long as the app runs.
+    keepalive = asyncio.create_task(ram_service.keepalive_loop())
+    try:
+        yield
+    finally:
+        keepalive.cancel()
+
 
 app = FastAPI(
-    title="SAS RAM Chat UI",
-    description="Custom chatbot UI for SAS Retrieval Agent Manager",
-    version="0.1.0",
+    title="SAS Retrieval Agent Assistant",
+    description="Chat UI for SAS Retrieval Agent Manager",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# CORS — permissive in dev; in prod the frontend is same-origin so CORS is moot
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The frontend is same-origin (served from here in production, proxied by Vite in
+# dev), so no CORS is needed. Only a frontend hosted on another origin needs it:
+# list those origins, comma-separated, in CORS_ORIGINS.
+_cors = [o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors:
+    app.add_middleware(CORSMiddleware, allow_origins=_cors, allow_credentials=True,
+                       allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def session_stamp_header(request: Request, call_next):
+    """Tell the browser which copy of its session is current.
+
+    The identity provider may issue a new refresh token whenever a session is
+    renewed. The browser keeps a copy of the refresh token to survive a
+    redeploy (see services.ram.restore_session), so each API response carries
+    the session's stamp and the page fetches a fresh copy when it changes."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        stamp = ram_service.session_stamp(request.cookies.get(ram_router.SESSION_COOKIE))
+        if stamp is not None:
+            response.headers["X-Session-Stamp"] = str(stamp)
+    return response
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz() -> dict:
+    """Liveness for the platform's health check: answers without calling RAM.
+    (/api/health is the RAM connection status the page shows.)"""
+    return {"status": "ok", "build": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7] or "local"}
+
 
 app.include_router(ram_router.router)
 
-print(f"✓ RAM connection: {ram_service.status()}")
 
-# ─── Static frontend (same pattern as the Health app) ────────────────
-FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist"))
+@app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
+def api_not_found(rest: str):
+    raise HTTPException(status_code=404, detail=f"No such API route: /api/{rest}")
 
-if os.path.isdir(FRONTEND_DIST):
-    assets_dir = os.path.join(FRONTEND_DIST, "assets")
-    if os.path.isdir(assets_dir):
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.get("/{filename:path}")
-    def serve_spa(filename: str):
-        if filename.startswith("api/"):
-            return {"error": "not found"}, 404
-        candidate = os.path.join(FRONTEND_DIST, filename)
-        if os.path.isfile(candidate):
-            return FileResponse(candidate)
-        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+# ─── Built frontend (production) ─────────────────────────────────────
+if FRONTEND_DIST.is_dir():
+    if (FRONTEND_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
-    print(f"✓ Serving frontend from {FRONTEND_DIST}")
+    # index.html and the files from /public are not content-hashed: have browsers
+    # revalidate them, so a redeploy shows up on the next load. /assets is hashed.
+    _REVALIDATE = {"Cache-Control": "no-cache"}
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str):
+        if path:
+            # Only ever a file inside the build: the resolved path must stay under
+            # dist, whatever the URL holds ("..", an absolute path, a symlink).
+            candidate = (FRONTEND_DIST / path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(FRONTEND_DIST):
+                return FileResponse(candidate, headers=_REVALIDATE)
+        return FileResponse(FRONTEND_DIST / "index.html", headers=_REVALIDATE)
 else:
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     def root() -> dict:
         return {
-            "service": "SAS RAM Chat UI",
-            "status": "operational (dev mode — no frontend build found)",
+            "service": "SAS Retrieval Agent Assistant",
+            "status": "API only: no frontend build found",
             "ram": ram_service.status(),
-            "hint": "run 'npm run build' in frontend/ for production, or run Vite dev server on :5173",
+            "hint": "Run 'npm run dev' in frontend/ and open http://localhost:5173, "
+                    "or 'npm run build' there to have this server serve the UI.",
         }
-
-    print(f"⚠ No frontend build at {FRONTEND_DIST} — API-only mode")
