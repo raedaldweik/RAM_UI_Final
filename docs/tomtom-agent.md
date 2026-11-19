@@ -67,7 +67,7 @@ unaffected.
 
 ## 4. Try it without a live agent (mock mode)
 
-Start the app in mock mode (`RAM_MOCK=true`, the default in `backend/.env.example`; see the
+Start the app in mock mode (`RAM_MOCK=true` with `RAM_API_URL` left empty; see the
 [README](../README.md#run-it-locally)) and ask anything with "route", "map" or "traffic" in it,
 for example "route from Burj Khalifa to Dubai Marina". The UI renders the sample Dubai map
 (route, markers, an incident, the traffic toggle). Set `VITE_TOMTOM_API_KEY` to see the basemap tiles.

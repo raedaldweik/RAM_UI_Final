@@ -11,6 +11,15 @@ const STR = {
   notConfigured: { en: 'Not configured', ar: 'غير مُهيّأ' },
   backendOffline: { en: 'Backend offline', ar: 'الخادم غير متصل' },
   langButton: { en: 'عربي', ar: 'English' },
+  // Shown under the header whenever the page is not talking to a real RAM
+  noticeMock: {
+    en: 'Demo mode: these agents and answers are made up. To connect to your own RAM, set RAM_API_URL to its address (in backend/.env for a local run, in the Variables tab on Railway) and restart.',
+    ar: 'وضع العرض التجريبي: هؤلاء الوكلاء والإجابات غير حقيقية. للاتصال ببيئة RAM الخاصة بك، اضبط RAM_API_URL على عنوانها (في backend/.env عند التشغيل المحلي، أو في تبويب Variables على Railway) ثم أعد التشغيل.',
+  },
+  noticeUnconfigured: {
+    en: 'Not connected to a RAM yet. Set RAM_API_URL to your RAM address, for example https://your-host/SASRetrievalAgentManager (in backend/.env for a local run, in the Variables tab on Railway), then restart. For a demo with made-up data, set RAM_MOCK=true instead.',
+    ar: 'لم يتم الاتصال ببيئة RAM بعد. اضبط RAM_API_URL على عنوان RAM الخاص بك، مثل https://your-host/SASRetrievalAgentManager (في backend/.env عند التشغيل المحلي، أو في تبويب Variables على Railway) ثم أعد التشغيل. لعرض تجريبي ببيانات غير حقيقية، اضبط RAM_MOCK=true بدلاً من ذلك.',
+  },
   you: { en: 'You', ar: 'أنت' },
 
   // Sign-in (Keycloak device flow / Viya paste-the-code flow)

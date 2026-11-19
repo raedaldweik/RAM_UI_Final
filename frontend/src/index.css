@@ -187,6 +187,19 @@ html, body {
 .header-btn:hover:not(:disabled) { background: var(--sas); color: #fff; border-color: var(--sas); }
 .header-btn:disabled { opacity: 0.6; cursor: default; }
 
+/* Setup notice: shown under the header while the page is not talking to a real RAM */
+.setup-notice {
+  position: relative; z-index: 2; flex: 0 0 auto;
+  display: flex; align-items: flex-start; gap: 9px;
+  margin: 12px 16px 0; padding: 9px 14px;
+  border-radius: 12px;
+  background: rgba(255, 247, 232, 0.92);
+  border: 1px solid rgba(180, 83, 9, 0.30);
+  color: #7a3a06;
+  font-size: 12.5px; font-weight: 500; line-height: 1.55;
+  box-shadow: 0 1px 2px rgba(15,23,42,0.05);
+}
+
 /* Connection status pill (header right) */
 .status-pill {
   display: inline-flex; align-items: center; gap: 8px;

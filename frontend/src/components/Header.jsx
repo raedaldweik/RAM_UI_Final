@@ -52,7 +52,13 @@ export default function Header() {
     : health.status === 'unconfigured' ? t('notConfigured')
     : t('backendOffline');
 
+  // Never leave someone guessing why they are not looking at their own agents.
+  const notice = health?.mode === 'mock' ? t('noticeMock')
+    : health?.status === 'unconfigured' ? t('noticeUnconfigured')
+    : null;
+
   return (
+    <>
     <header className="app-header">
       <img className="brand-logo" src="/sas_logo.png" alt="SAS"
         onError={e => { e.target.style.display = 'none'; }} />
@@ -79,5 +85,14 @@ export default function Header() {
         <button onClick={toggle} className="header-btn" title="English / عربي">{t('langButton')}</button>
       </div>
     </header>
+    {notice && (
+      <div className="setup-notice" role="status">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 mt-[2px]" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><line x1="12" y1="8" x2="12" y2="12.5" /><line x1="12" y1="16" x2="12" y2="16.01" />
+        </svg>
+        <span>{notice}</span>
+      </div>
+    )}
+    </>
   );
 }

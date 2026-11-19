@@ -41,6 +41,14 @@ FRONTEND_DIST = (BACKEND_DIR.parent / "frontend" / "dist").resolve()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("RAM connection: %s", ram_service.status())
+    if ram_service.RAM_API_URL and ram_service.ADDRESS_SOURCE != "RAM_API_URL":
+        log.info("RAM address taken from %s", ram_service.ADDRESS_SOURCE)
+    if ram_service.MOCK_REQUESTED and not ram_service.MOCK:
+        log.info("RAM_MOCK=true is ignored: a RAM address is set, so the app talks to that RAM")
+    elif ram_service.MOCK:
+        log.info("Demo mode (RAM_MOCK=true): made-up agents and answers. Set RAM_API_URL to connect to a RAM")
+    elif not ram_service.RAM_API_URL:
+        log.warning("Not connected to a RAM: set RAM_API_URL (or RAM_MOCK=true for a demo)")
     if FRONTEND_DIST.is_dir():
         log.info("Serving the frontend from %s", FRONTEND_DIST)
     else:

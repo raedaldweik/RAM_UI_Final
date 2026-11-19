@@ -29,13 +29,15 @@ token (localStorage) to hand back after a redeploy on a fresh container
 Other env vars:
     RAM_API_URL     — https://host/SASRetrievalAgentManager/api/v1. The address RAM is
                       opened at in a browser (…/SASRetrievalAgentManager) works too:
-                      /api/v1 is added.
+                      /api/v1 is added. Setting it is what connects the app: it wins
+                      over RAM_MOCK.
     SAS_LOGON_URL   — override the OAuth token endpoint (default derived from RAM_API_URL)
     RAM_CLIENT_ID   — public client for the device flow (default "sas-ram-api")
     RAM_REALM       — Keycloak realm for standalone RAM (default "sas-iot")
     RAM_AUTH_FLOW   — force "device" (Keycloak) or "code" (Viya SASLogon paste-the-code)
     RAM_VERIFY_SSL  — "false" to skip TLS verification (self-signed certs)
-    RAM_MOCK        — "true" to run against an in-memory mock (UI demo without RAM)
+    RAM_MOCK        — "true" to run against an in-memory mock (UI demo without RAM).
+                      Only applies while no RAM address is set.
     RAM_HIDE_HISTORY — "true" to hide RAM's session history (only needed when several
                        people share one RAM login)
     RAM_SESSION_FILE — where signed-in sessions are persisted (default data/runtime/ram_sessions.json;
@@ -69,10 +71,19 @@ logger = logging.getLogger(__name__)
 RAM_PATH = "/SASRetrievalAgentManager"
 
 
+# The Agentic-Bootcamp app keeps one RAM per "environment" (ENV1_…, ENV2_…). This
+# app talks to one RAM, so it also understands the first environment's names:
+# that app's variables can be copied to this one as they are.
+_BOOTCAMP_NAMES = {"RAM_REALM": "ENV1_RAM_REALM", "RAM_CLIENT_ID": "ENV1_RAM_CLIENT_ID"}
+
+
 def _cfg(name: str, default: str = "") -> str:
     """An environment setting, stripped; `default` when unset or blank (a
     variable left empty in a hosting dashboard counts as unset)."""
-    return (os.getenv(name) or "").strip() or default
+    value = (os.getenv(name) or "").strip()
+    if not value and name in _BOOTCAMP_NAMES:
+        value = (os.getenv(_BOOTCAMP_NAMES[name]) or "").strip()
+    return value or default
 
 
 def normalize_api_url(raw: str) -> str:
@@ -96,7 +107,23 @@ def normalize_api_url(raw: str) -> str:
     return url
 
 
-RAM_API_URL = normalize_api_url(os.getenv("RAM_API_URL", ""))
+# Where the RAM address is read from, first one set wins. RAM_API_URL is this
+# app's name for it; the others are the Agentic-Bootcamp app's (see _BOOTCAMP_NAMES).
+ADDRESS_VARIABLES = ("RAM_API_URL", "ENV1_RAM_API_URL", "ENV1_RAM_URL", "RAM_URL")
+
+
+def _configured_address() -> tuple[str, str]:
+    """(address, the variable it came from). A value still holding the
+    placeholder from .env.example ("your-ram-host", "<host>") is not an address."""
+    for name in ADDRESS_VARIABLES:
+        value = _cfg(name)
+        if value and "your-ram-host" not in value and "<" not in value:
+            return value, name
+    return "", ""
+
+
+_address, ADDRESS_SOURCE = _configured_address()
+RAM_API_URL = normalize_api_url(_address)
 
 
 def _api_url() -> str:
@@ -104,7 +131,11 @@ def _api_url() -> str:
 
 
 VERIFY_SSL = _cfg("RAM_VERIFY_SSL", "true").lower() != "false"
-MOCK = _cfg("RAM_MOCK").lower() == "true"
+# The mock is a demo for when there is no RAM to talk to. A RAM address always
+# wins over it: with both set, a page that quietly shows made-up agents instead
+# of the RAM that was configured is the worse surprise.
+MOCK_REQUESTED = _cfg("RAM_MOCK").lower() == "true"
+MOCK = MOCK_REQUESTED and not RAM_API_URL
 
 TIMEOUT = httpx.Timeout(10.0, read=180.0)
 
@@ -622,8 +653,8 @@ async def _request(method: str, path: str, *, params: dict | None = None, json: 
         return (data, None) if with_response else data
     api = _api_url()
     if not api:
-        raise RamError(500, "RAM_API_URL is not configured. Set it in backend/.env for a local run "
-                            "(see backend/.env.example) or in the Variables tab on Railway.")
+        raise RamError(500, "No RAM address is configured. Set RAM_API_URL (in backend/.env for a local "
+                            "run, in the Variables tab on Railway) and restart.")
 
     token = await _get_token()
     url = f"{api}{path}"
@@ -1010,7 +1041,7 @@ async def status_async() -> dict:
     return s
 
 
-# ─── In-memory mock (RAM_MOCK=true) ──────────────────────────────────
+# ─── In-memory mock (RAM_MOCK=true and no RAM address) ───────────────
 # Lets the UI run end-to-end without a reachable RAM / Viya environment: two
 # agents, two collections, a grounded answer, and (when the question asks for
 # one) a chart or a map, so every kind of card can be seen without a live agent.
@@ -1096,8 +1127,8 @@ def _mock_map_spec() -> dict:
     }
 
 
-_MOCK_FOOTER = ("_Simulated answer: unset `RAM_MOCK` and point `RAM_API_URL` at a live SAS Retrieval "
-                "Agent Manager deployment for real ones._")
+_MOCK_FOOTER = ("_Simulated answer. Set `RAM_API_URL` to your SAS Retrieval Agent Manager address "
+                "and restart to talk to your own agents._")
 
 
 def _mock_answer(content: str, target_name: str) -> tuple[str, list[dict]]:

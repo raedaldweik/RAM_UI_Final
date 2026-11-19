@@ -26,18 +26,41 @@ laptop and on Railway.
 You need **Python 3.10+** and **Node.js 20.19+ or 22.12+**. (Or only Docker: see
 [one container](#one-container-instead-docker).)
 
-### 1. Backend (terminal 1)
+### 1. Tell it where your RAM is
+
+```bash
+cd backend
+cp .env.example .env             # Windows: copy .env.example .env
+```
+
+Open `backend/.env` and set the one line that matters, the address of your RAM:
+
+```bash
+RAM_API_URL=https://<your-ram-host>/SASRetrievalAgentManager
+```
+
+That is the address you open RAM at in a browser (the API form ending in `/api/v1` works too).
+If the host uses a self-signed certificate, also set `RAM_VERIFY_SSL=false`.
+
+No RAM at hand? Leave `RAM_API_URL` empty and set `RAM_MOCK=true` to try the page with made-up
+agents (ask them for "a chart" or "a route" to see those cards). As soon as `RAM_API_URL` is set,
+the app talks to that RAM: an address always wins over `RAM_MOCK`.
+
+### 2. Backend (terminal 1)
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env             # Windows: copy .env.example .env
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --reload-include .env --port 8000
 ```
 
-### 2. Frontend (terminal 2)
+`--reload-include .env` makes the backend restart by itself when you edit `backend/.env`.
+The first log lines say what it started with, for example
+`RAM connection: {'status': 'signin_required', 'mode': 'live', 'ramUrl': 'https://…/api/v1', …}`.
+
+### 3. Frontend (terminal 2)
 
 ```bash
 cd frontend
@@ -45,26 +68,17 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173**. The dev server forwards `/api` to the backend on port 8000.
+Open **http://localhost:5173** (the dev server forwards `/api` to the backend on port 8000) and
+click **Sign in** in the header. See [Signing in](#signing-in) for what happens next.
 
-`backend/.env.example` starts in **mock mode** (`RAM_MOCK=true`), so the page works straight
-away with made-up agents and no RAM at all; the status pill in the header says *Mock mode*.
-Ask for "a chart of revenue by region" or "a route to Dubai Marina" to see the chart and map cards.
+The pill in the header tells you where you stand, and the page says what to do about it:
 
-### 3. Connect it to your RAM
-
-Edit `backend/.env`:
-
-```bash
-RAM_MOCK=false
-RAM_API_URL=https://<your-ram-host>/SASRetrievalAgentManager/api/v1
-```
-
-Restart the backend (stop it with Ctrl+C and run the `uvicorn` line again; `--reload` watches
-code, not `.env`). Reload the page and click **Sign in** in the header. That is the whole setup:
-see [Signing in](#signing-in) for what happens next and for the non-interactive options.
-
-If your RAM host uses a self-signed certificate, also set `RAM_VERIFY_SSL=false`.
+| Pill | Meaning |
+|---|---|
+| **Sign in required** | Connected to your RAM; click *Sign in*. |
+| **Connected** | Signed in; the dropdown lists your agents. |
+| **Not configured** | `RAM_API_URL` is empty. |
+| **Mock mode** | `RAM_MOCK=true` and no `RAM_API_URL`: the agents are made up. |
 
 ### One container instead (Docker)
 
@@ -93,15 +107,19 @@ restart the service if it crashes. Railway deploys the **`main`** branch.
 
    | Variable | Value |
    |---|---|
-   | `RAM_API_URL` | `https://<your-ram-host>/SASRetrievalAgentManager/api/v1` |
+   | `RAM_API_URL` | `https://<your-ram-host>/SASRetrievalAgentManager` |
 
-   That one variable is enough: people sign in from the page. To try the deploy without a RAM,
-   set `RAM_MOCK=true` instead. Every other setting is optional and listed under
-   [Settings](#settings). Railway redeploys when variables change.
+   That one variable is enough: people sign in from the page. Apply / deploy the change when
+   Railway asks. Every other setting is optional and listed under [Settings](#settings).
+
+   Coming from the Agentic-Bootcamp service? It is the value of its `ENV1_RAM_URL`. You can also
+   copy that service's variables over as they are: this app reads `ENV1_RAM_URL` (and
+   `ENV1_RAM_REALM`, `ENV1_RAM_CLIENT_ID`) when `RAM_API_URL` is not set.
 
 3. **Give it a public address.** Service → **Settings → Networking → Generate Domain**.
 
-4. **Open the address** and click **Sign in**.
+4. **Open the address** and click **Sign in**. If the pill says *Not configured* or *Mock mode*
+   instead, the page tells you why: `RAM_API_URL` has not reached the service.
 
 From then on, **every push to `main` redeploys** the service.
 
@@ -147,8 +165,8 @@ Set these in `backend/.env` for a local run, or in the service's **Variables** t
 
 | Variable | Default | What it does |
 |---|---|---|
-| `RAM_API_URL` | *(none)* | Address of RAM: `https://<host>/SASRetrievalAgentManager/api/v1`. The address you open RAM at in a browser (`…/SASRetrievalAgentManager`) also works; `/api/v1` is added. |
-| `RAM_MOCK` | `false` | `true` runs the UI against a built-in mock and ignores everything else. |
+| `RAM_API_URL` | *(none)* | **The address of your RAM.** `https://<host>/SASRetrievalAgentManager` (the address you open RAM at) or the API form ending in `/api/v1`. Setting it is what connects the app. |
+| `RAM_MOCK` | `false` | `true` runs the page on made-up agents and answers. Only applies while `RAM_API_URL` is empty: an address always wins. |
 | `RAM_VERIFY_SSL` | `true` | `false` to accept a self-signed certificate on the RAM host. |
 
 **Interactive sign-in** (the default; normally nothing to set)
@@ -294,7 +312,8 @@ traffic incidents and areas on an interactive map. Setup is in
 
 | What you see | What to do |
 |---|---|
-| Pill says **Not configured** | `RAM_API_URL` is not set (and `RAM_MOCK` is not `true`). Set one and restart / redeploy. |
+| Pill says **Mock mode**, agents are made up | `RAM_MOCK=true` is set and `RAM_API_URL` is empty (or still the placeholder from the example file). Set `RAM_API_URL` to your RAM address. Locally that is `backend/.env`; restart the backend unless it runs with `--reload-include .env`. On Railway it is the Variables tab. |
+| Pill says **Not configured** | `RAM_API_URL` is empty. Same fix. The first lines of the backend log show what it started with. |
 | Pill says **Backend offline** | Local: the backend is not running on port 8000. Railway: look at the deploy log. |
 | Dropdown says **Service unreachable**, error mentions *Could not reach SAS RAM* | The backend cannot open a connection to the RAM host. Check the address; `RAM_VERIFY_SSL=false` for a self-signed certificate. On Railway the RAM host must be reachable from the internet: a RAM behind a VPN is not. |
 | **Sign in** fails with *Device authorization failed* | The realm or client differs from the defaults: set `RAM_REALM` / `RAM_CLIENT_ID`. If this RAM is part of a full SAS Viya, set `RAM_AUTH_FLOW=code`. |
